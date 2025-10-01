@@ -1,0 +1,215 @@
+---
+title: "VEC/VAR"
+author: "Corona López José Luis"
+date: "2025-03-29"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+header-includes: \renewcommand{\and}{\\}
+---
+
+
+```{r, message=FALSE}
+library(readxl)
+library(tseries)
+library(dynlm)
+library(urca)
+library(vars)
+library(FinTS)
+library(rugarch) 
+library(quantmod)
+library(forecast)
+```
+
+# Modelo VEC / VAR
+
+## Introducción 
+
+La captación total de un banco es la suma de todos los recursos que ha recibido del público. Estos recursos se obtienen a través de depósitos a la vista o a plazo, cuentas de ahorro, participaciones, cesiones, transferencias de efectos de comercio, entre otros. 
+
+HSBC y Scotiabank México son dos bancos con enfoques similares en la captación, pero con estrategias ligeramente diferentes. HSBC, parte de un grupo global, se enfoca en captar depósitos tanto de clientes minoristas como corporativos. Scotiabank, vinculado a un grupo canadiense, también capta depósitos de individuos y empresas. Dado que ambos operan en el mismo mercado y ofrecen productos similares, es probable que sus captaciones estén cointegradas, lo que hace que un modelo VEC sea más apropiado para analizar la relación de largo plazo, si no hay cointegración, un modelo VAR sería más adecuado para estudiar las interacciones de corto plazo.
+
+```{r, message=FALSE}
+# Importamos las bases de datos
+
+Scotiabank <- read_excel("/Users/josecoronalopez/Library/CloudStorage/OneDrive-BeneméritaUniversidadAutónomadePuebla/1. Actuaría/9. Noveno Semestre/2. Econometría II/5. Examenes/sh_data_export_40.xlsx", 
+    sheet = "Scotiabank")
+
+HSBC <- read_excel("/Users/josecoronalopez/Library/CloudStorage/OneDrive-BeneméritaUniversidadAutónomadePuebla/1. Actuaría/9. Noveno Semestre/2. Econometría II/5. Examenes/sh_data_export_40.xlsx", 
+    sheet = "HSBC")
+```
+
+
+```{r}
+# Definimos nuestra variable de interés como una serie de tiempo
+
+# Captación de Scotiabank
+SCap <- as.numeric(t(Scotiabank[284, -c(1:2)]))
+Scotiabank.ts <- ts(log(SCap), start = c(2000, 12, 1), frequency = 12)
+
+# Captación de HSBC
+HCap <- as.numeric(t(HSBC[284, -c(1:2)]))
+HSBC.ts <- ts(log(HCap), start = c(2000, 12, 1), frequency = 12)
+```
+
+## Desarrollo
+
+```{r}
+ts.plot(HSBC.ts, Scotiabank.ts, col = c("#458B00", "gold2"), main = "Captación Total",
+        xlab = "Años")
+legend("bottomright", legend = c("HSBC", "Scotiabank"), col = c("#458B00", "gold2"), lwd = 2)
+```
+
+Se aplicó una transformación logarítmica a los datos de captación debido a su magnitud, lo que facilita la visualización y el análisis. Inicialmente, se observa una diferencia significativa entre la captación de ambos bancos. Sin embargo, a partir de 2018, las tendencias convergen, llegando a ser casi idénticas en el último año.
+
+### Prueba de Estacionariedad
+
+$$
+H_0: La\ serie\ no\ es\ estacionaria
+$$
+$$vs$$
+$$
+H_1: La\ serie\ es\ estacionaria  \\
+$$
+
+```{r}
+adf.test(HSBC.ts)
+adf.test(Scotiabank.ts)
+```
+
+Para HSBC, obtenemos un $p-value=0.1568 > 0.05$, por lo que no rechazamos hipótesis nula al $\alpha= 0.05$, es decir HSBC.ts no es estacionaria. Mientras que para Scotiabank nos arroja un $p-value=0.7031 > 0.05$, lo que indica que también no rechazamos hipótesis nula, por lo tanto ninguna de nuestras series es estacionaria. Ahora probaremos las primeras diferencias
+
+```{r}
+dHSBC <- diff(HSBC.ts)
+dSco <- diff(Scotiabank.ts)
+
+ts.plot(dHSBC, dSco, col = c("#6B8E23", "#FFEC8B"), main = "Primera Diferencia de Captación Total",
+        xlab = "Años")
+legend("bottomright", legend = c("HSBC", "Scotiabank"), col = c("#6B8E23", "#FFEC8B"), lwd = 2)
+```
+
+La primera diferencia de ambas series muestra indicios de estacionariedad, evidenciados por la reversión a la media y una varianza relativamente constante, aunque se observan fluctuaciones mayores en HSBC. Para confirmar la estacionariedad, se aplicará la prueba de Dickey-Fuller.
+
+$$
+H_0: La\ serie\ no\ es\ estacionaria
+$$
+$$vs$$
+$$
+H_1: La\ serie\ es\ estacionaria  \\
+$$
+
+```{r}
+adf.test(dHSBC)
+adf.test(dSco)
+```
+
+Ambos $p-value < 0.05$, por lo que la primera diferencia del logaritmo de captación total de HSBC y Scotiabank son estacionarias, es decir, tienen revsersión a la media y una varianza constante, por lo tanto, $HSBC_t\ \sim\ I(1)$, y $Scotiabank_t\ \sim\ I(1)$.
+
+Los resultados y gráficos preliminares sugieren la posible cointegración de estas series. Para confirmar esta hipótesis, realizaremos la prueba de cointegración. Esto implica llevar a cabo una regresión lineal para obtener los residuos y, posteriormente, evaluar su estacionariedad mediante pruebas estadísticas adecuadas. En caso de que se confirme continuaremos a hacer un modelo VEC, en caso contrario realizaremos un VAR.
+
+### Cointegración
+
+```{r}
+mod1 <- dynlm(HSBC.ts ~ Scotiabank.ts)
+summary(mod1)
+```
+
+HSBC y Scotiabank son bancos independientes que captan depósitos, aunque ambas captaciones están correlacionadas, existe un nivel base de captación que no depende de la otra directamente, si la captación de Scotiabank baja a cero, HSBC aún podría captar depósitos y viceversa, por lo tanto en este caso dejamos el intercepto. 
+
+```{r}
+e <- residuals(mod1)
+plot(e, col = "salmon2", xlab = "Años", ylab = "Residuos", 
+        main = "Residuos de la Regresión")
+```
+
+Los residuos de la regresión lineal entre ambos bancos muestran variabilidad, lo que sugiere la ausencia de reversión a la media y una varianza no constante a lo largo del tiempo. No obstante, la media de los residuos se mantiene cercana a cero. Para determinar si los residuos son estacionarios, se realizará la prueba correspondiente.
+
+
+
+```{r}
+acf(diff(e))
+```
+
+Observamos que hay algunos rezagos que rebasan las bandas de confianza en diferentes momentos, tal vez tendríamos alguna cuestión sobre el ciclo, sin embargo tomaremos el primer rezago. Por lo tanto el modelo al que se le aplicaría la prueba de errores sobre los residuos es:
+
+$$
+\widehat{\Delta e_t} =\gamma\hat{e}_{t-1}\ +\ \gamma_2\Delta \hat{e}_{t-1}\ +\ v_t
+$$
+
+```{r}
+e.dyn <- dynlm(d(e) ~ L(e, 1) + d(L(e,1)) - 1)
+summary(e.dyn)
+```
+
+```{r}
+summary(ur.df(e, type = "none", lags = 1))
+```
+
+Como nuestro $\tau = -2.0004 > -3.07$, no rechazamos hipótesis nula, al $\alpha = 0.1$, los residuos no son estacionarios, por lo tanto $HSBC_t$ y $Scotiabank_t$ no están cointegradas, entonces la relación entre ellas puede ser espuria. Debido a que no estan cointegradas no podemos usar modelo VEC, en su defecto aplicaremos un VAR para analizar las dinámicas a corot plazo.
+
+### Modelo VAR
+
+```{r}
+varmat <- as.matrix(cbind(dHSBC, dSco))
+mvar <- VAR(varmat)
+summary(mvar)
+```
+
+$$
+\widehat{\Delta HSBC_t} = 0.006348\ -\ 0.177884\Delta HSBC_{t-1}\ + 0.094073\Delta Scotiabank_{t-1}
+$$
+$$
+(t)\hspace{1.8cm} (2.927 )\hspace{1.9cm}(0.023878)\hspace{3cm}(1.406)
+$$
+
+$$
+\widehat{\Delta Scotiabank_t} = 0.009938 \ +\  0.023878\Delta HHSBC_{t-1}\ -\ 0.167837\Delta Scotiabank_{t-1}
+$$
+$$
+(t)\hspace{1.8cm} (5.200)\hspace{1.9cm}(0.455)\hspace{3cm}(-2.848)
+$$
+
+## Conclusión
+
+En la primera ecuación el coeficiente de $\Delta HSBC_{t-1}$ es de -0.177884, con un $p-value$ significativo, esto indica que el valor pasado de la captación de HSBC tiene un impacto negativo en la variación actual. Mientras que el coeficiente de $\Delta Scotiabank_{t-1} = 0.095$, sin embargo tiene un $p-value=0.16069$, lo que significa que no es significativo, por lo que la variación de la captación de Scotiabank no afecta significativamente la variación de HSBC en el corto plazo.El intercepto es 0.0063, lo que indica un pequeño crecimiento promedio en  $\Delta HSBC_{t}$incluso si las variables pasadas son cero.
+
+En la segunda ecuación el coeficiente de $\Delta HSBC_{t-1}$ es de -0.023878, con un $p-value = 0.6492$, por lo que no es significativo, señala que la variación pasada de HSBC no afecta significativamente la variación actual de Ascotiabank, por otro lado tenemos el coeficiente de $\Delta Scotiabank_{t-1} = -\ 0.1678$, con un $p-value =0.00472$, el cual es significativo , por lo que la variación pasada de Scotiabank tiene un impacto negativo y significativo en su variación actual.
+
+La relación entre las captaciones de HSBC y Scotiabank no es fuerte en términos de efectos de corto plazo, no obstante cada banco es más influenciado por su propia dinámica pasada que por la del otro. Podríamos mejorar el modelo utilizando más rezagos o considerando más variables debido a que este método no se restringe a dos variables podríamos integrar la captación de los demás bancos tales como Banamex, BBVA, Santander y demás, esto podría mejorar el modelo.
+
+Para completar la poca relación con entre las variables usamos las gráficas de impulso respuesta
+
+```{r}
+impres <- irf(mvar)
+plot(impres)
+```
+
+En términos generales, se observa que un choque en cualquiera de las variables tiene un efecto limitado, casi insignificante, sobre la otra. No obstante, el efecto es ligeramente más pronunciado y significativo sobre la variable afectada. Además, la estabilización ocurre rápidamente, sin extenderse más allá de tres períodos.
+
+En general, un choque en cualquiera de las variables produce un efecto limitado, casi insignificante, en la otra. Sin embargo, el impacto es ligeramente mayor y significativo en la variable afectada directamente. Además, la estabilización se produce rápidamente, en un plazo máximo de tres períodos.
+
+
+```{r}
+plot(fevd(mvar), col = c("#6B8E23", "#FFEC8B"))
+```
+
+En cuanto al efecto de la varianza, se observa un comportamiento similar: cada variable, ya sea HSBC o Scotiabank, ejerce un efecto predominante sobre sí misma, con una influencia mínima de la otra.
+
+
+# Referencias
+
+Banco de México. Indicadores gráficos Captación de Recursos. https://www.banxico.org.mx/IndicadoresGraficos/actions/contenidoPortal/pyramid/23/50?menu=221&seccion=1596&locale=es
+
+
+
+
+
+
+
+
+
+
+
+
+
